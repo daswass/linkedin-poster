@@ -1,0 +1,34 @@
+# Environment variables
+.env
+
+# Posts data (contains actual post content - keep private)
+posts.json
+
+# Generated images
+images/
+*.png
+*.jpg
+*.jpeg
+!*.example.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/*
+!.vscode/tasks.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

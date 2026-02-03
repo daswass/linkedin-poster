@@ -1,0 +1,10 @@
+# LinkedIn Posts
+# Add your posts here, one per line
+# Lines starting with # are ignored
+# Empty lines are skipped
+
+Welcome to our company! We're excited to share our latest updates.
+
+Check out our new product launch - it's going to revolutionize the industry!
+
+Join us for our upcoming webinar on industry trends and best practices.
