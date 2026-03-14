@@ -18,11 +18,16 @@ load_dotenv()
 
 LINKEDIN_ACCESS_TOKEN = os.getenv('LINKEDIN_ACCESS_TOKEN')
 LINKEDIN_COMPANY_PAGE_URN = os.getenv('LINKEDIN_COMPANY_PAGE_URN')
+LINKEDIN_CLIENT_ID = os.getenv('LINKEDIN_CLIENT_ID')
+LINKEDIN_CLIENT_SECRET = os.getenv('LINKEDIN_CLIENT_SECRET')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # LinkedIn API endpoints
-POSTS_API = 'https://api.linkedin.com/v2/ugcPosts'
+# Using the newer Posts API (replaces deprecated ugcPosts API)
+POSTS_API = 'https://api.linkedin.com/rest/posts'
 IMAGES_API = 'https://api.linkedin.com/v2/images'
+# LinkedIn API version (format: YYYYMM)
+LINKEDIN_API_VERSION = '202601'  # January 2026 (202502 sunset)
 
 
 def load_posts_from_file(file_path='posts.txt'):
@@ -40,7 +45,7 @@ def load_posts_from_file(file_path='posts.txt'):
             if not line or line.startswith('#'):
                 continue
             posts.append({
-                'text': line,
+                'content': line,
                 'line': line_num
             })
     
@@ -63,16 +68,14 @@ def load_posts_from_json(file_path='posts.json'):
                 # Handle array of posts
                 for item in data:
                     if isinstance(item, dict):
-                        # Support both 'text' and 'content' keys
-                        text = item.get('text') or item.get('content', '')
-                        if text:
+                        content = item.get('content', '')
+                        if content:
                             post_data = item.copy()  # Preserve all fields
-                            if 'text' not in post_data and 'content' in post_data:
-                                post_data['text'] = post_data['content']
+                            post_data.pop('text', None)  # Remove legacy text field
                             posts.append(post_data)
                     elif isinstance(item, str):
                         # Handle array of strings
-                        posts.append({'text': item})
+                        posts.append({'content': item})
             elif isinstance(data, dict) and 'posts' in data:
                 posts = data['posts']
                 original_data = data
@@ -345,7 +348,7 @@ def generate_image_with_gemini(image_prompt, output_path=None, dry_run=False):
 
 def upload_image_to_linkedin(image_path, company_urn, dry_run=False):
     """
-    Upload an image to LinkedIn and return the digital media asset URN.
+    Upload an image to LinkedIn using the Images API and return the image URN.
     
     Args:
         image_path: Path to the image file
@@ -353,7 +356,7 @@ def upload_image_to_linkedin(image_path, company_urn, dry_run=False):
         dry_run: If True, skip actual upload
     
     Returns:
-        Digital media asset URN (urn:li:digitalmediaAsset:XXXXX) or None
+        Image URN (urn:li:image:XXXXX) or None
     """
     if not os.path.exists(image_path):
         print(f"  ❌ Image file not found: {image_path}")
@@ -361,42 +364,50 @@ def upload_image_to_linkedin(image_path, company_urn, dry_run=False):
     
     if dry_run:
         print(f"  [DRY RUN] Would upload image: {image_path}")
-        return "urn:li:digitalmediaAsset:dry-run-urn"
+        return "urn:li:image:dry-run-urn"
     
     try:
-        # Step 1: Register upload to get upload URL
-        register_data = {
-            "registerUploadRequest": {
-                "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
-                "owner": company_urn,
-                "serviceRelationships": [{
-                    "relationshipType": "OWNER",
-                    "identifier": "urn:li:userGeneratedContent"
-                }]
+        # Step 1: Initialize upload to get upload URL (using new Images API)
+        initialize_data = {
+            "initializeUploadRequest": {
+                "owner": company_urn
             }
         }
         
         headers = {
             'Authorization': f'Bearer {LINKEDIN_ACCESS_TOKEN}',
             'Content-Type': 'application/json',
-            'X-Restli-Protocol-Version': '2.0.0'
+            'X-Restli-Protocol-Version': '2.0.0',
+            'Linkedin-Version': LINKEDIN_API_VERSION
         }
         
-        # Register the upload
-        register_response = requests.post(
-            'https://api.linkedin.com/v2/assets?action=registerUpload',
-            json=register_data,
+        # Initialize the upload
+        initialize_response = requests.post(
+            'https://api.linkedin.com/rest/images?action=initializeUpload',
+            json=initialize_data,
             headers=headers
         )
         
-        if register_response.status_code != 200:
-            print(f"  ❌ Failed to register upload: {register_response.status_code}")
-            print(f"  Response: {register_response.text}")
+        if initialize_response.status_code != 200:
+            print(f"  ❌ Failed to initialize upload: {initialize_response.status_code}")
+            print(f"  Response: {initialize_response.text}")
+            
+            # Check for permission errors
+            if initialize_response.status_code == 400:
+                error_data = initialize_response.json() if initialize_response.text else {}
+                error_msg = error_data.get('message', '')
+                if 'organization permissions' in error_msg.lower():
+                    print()
+                    print("  ⚠ PERMISSION ERROR:")
+                    print("  Your access token doesn't have 'w_organization_social' permission.")
+                    print("  Run: python get_access_token.py to regenerate your token")
+                    print("  Make sure your LinkedIn app has 'Community Management API' product approved")
+            
             return None
         
-        register_data = register_response.json()
-        upload_url = register_data['value']['uploadMechanism']['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest']['uploadUrl']
-        asset_urn = register_data['value']['asset']
+        initialize_result = initialize_response.json()
+        upload_url = initialize_result['value']['uploadUrl']
+        image_urn = initialize_result['value']['image']
         
         # Step 2: Upload the image file
         with open(image_path, 'rb') as image_file:
@@ -410,13 +421,84 @@ def upload_image_to_linkedin(image_path, company_urn, dry_run=False):
                 print(f"  Response: {upload_response.text}")
                 return None
         
-        print(f"  ✓ Image uploaded successfully: {asset_urn}")
-        return asset_urn
+        print(f"  ✓ Image uploaded successfully: {image_urn}")
+        return image_urn
         
     except Exception as e:
         print(f"  ❌ Error uploading image: {e}")
         import traceback
         traceback.print_exc()
+        return None
+
+
+def verify_organization_access(company_urn):
+    """Verify that we have access to post as the organization"""
+    try:
+        url = 'https://api.linkedin.com/v2/organizationalEntityAcls'
+        params = {
+            'q': 'roleAssignee',
+            'role': 'ADMINISTRATOR'
+        }
+        headers = {
+            'Authorization': f'Bearer {LINKEDIN_ACCESS_TOKEN}',
+            'X-Restli-Protocol-Version': '2.0.0'
+        }
+        
+        response = requests.get(url, headers=headers, params=params)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if 'elements' in data:
+                for element in data['elements']:
+                    org_urn = element.get('organizationalTarget')
+                    if org_urn == company_urn:
+                        return True
+            print(f"  ⚠ Warning: Organization {company_urn} not found in your accessible organizations")
+            return False
+        elif response.status_code == 403:
+            # 403 is common: organizationalEntityAcls needs rw_organization_admin;
+            # w_organization_social (posting) doesn't grant ACL read access
+            print(f"  ℹ Skipping org verification (403 - normal if you only have posting permissions)")
+            return None
+        else:
+            print(f"  ⚠ Warning: Could not verify organization access: {response.status_code}")
+            return None  # Unknown, but continue anyway
+    except Exception as e:
+        print(f"  ⚠ Warning: Error verifying organization: {e}")
+        return None  # Unknown, but continue anyway
+
+
+def verify_token_has_org_scope():
+    """
+    Use LinkedIn token introspection to verify the access token has w_organization_social.
+    Returns True if scope is present, False if missing, None if we couldn't check.
+    """
+    if not LINKEDIN_CLIENT_ID or not LINKEDIN_CLIENT_SECRET:
+        return None  # Can't introspect without client credentials
+    if not LINKEDIN_ACCESS_TOKEN:
+        return None
+
+    try:
+        response = requests.post(
+            'https://www.linkedin.com/oauth/v2/introspectToken',
+            data={
+                'client_id': LINKEDIN_CLIENT_ID,
+                'client_secret': LINKEDIN_CLIENT_SECRET,
+                'token': LINKEDIN_ACCESS_TOKEN,
+            },
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        )
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+        if not data.get('active'):
+            return False
+
+        scope_str = data.get('scope', '') or ''
+        scopes = [s.strip() for s in scope_str.split(',')]
+        return 'w_organization_social' in scopes
+    except Exception:
         return None
 
 
@@ -432,6 +514,12 @@ def post_to_linkedin(text, company_urn, image_path=None, dry_run=False):
         print("   Format: urn:li:organization:XXXXX")
         return None
     
+    # Verify organization URN format
+    if not company_urn.startswith('urn:li:organization:'):
+        print(f"❌ ERROR: Invalid organization URN format: {company_urn}")
+        print("   Expected format: urn:li:organization:XXXXX")
+        return None
+    
     # Prepare text for LinkedIn
     formatted_text = prepare_text_for_linkedin(text)
     
@@ -442,34 +530,28 @@ def post_to_linkedin(text, company_urn, image_path=None, dry_run=False):
         if not image_urn and not dry_run:
             print("  ⚠ Continuing without image due to upload failure")
     
-    # Prepare the post data according to LinkedIn UGC Posts API
-    share_content = {
-        "shareCommentary": {
-            "text": formatted_text
+    # Prepare the post data according to LinkedIn Posts API (newer API)
+    post_data = {
+        "author": company_urn,
+        "commentary": formatted_text,  # Uses 'little' text format
+        "visibility": "PUBLIC",
+        "distribution": {
+            "feedDistribution": "MAIN_FEED",
+            "targetEntities": [],
+            "thirdPartyDistributionChannels": []
         },
-        "shareMediaCategory": "IMAGE" if image_urn else "NONE"
+        "lifecycleState": "PUBLISHED",
+        "isReshareDisabledByAuthor": False
     }
     
     # Add media if image is present
     if image_urn:
-        share_content["media"] = [{
-            "status": "READY",
-            "media": image_urn,
-            "title": {
-                "text": "Generated Image"
+        post_data["content"] = {
+            "media": {
+                "id": image_urn,
+                "title": "Generated Image"
             }
-        }]
-    
-    post_data = {
-        "author": company_urn,
-        "lifecycleState": "PUBLISHED",
-        "specificContent": {
-            "com.linkedin.ugc.ShareContent": share_content
-        },
-        "visibility": {
-            "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
         }
-    }
     
     if dry_run:
         print("  [DRY RUN] Would post to LinkedIn:")
@@ -496,20 +578,66 @@ def post_to_linkedin(text, company_urn, image_path=None, dry_run=False):
     headers = {
         'Authorization': f'Bearer {LINKEDIN_ACCESS_TOKEN}',
         'Content-Type': 'application/json',
-        'X-Restli-Protocol-Version': '2.0.0'
+        'X-Restli-Protocol-Version': '2.0.0',
+        'Linkedin-Version': LINKEDIN_API_VERSION
     }
     
     try:
         response = requests.post(POSTS_API, json=post_data, headers=headers)
         
         if response.status_code == 201:
-            post_id = response.headers.get('x-linkedin-id')
+            # New Posts API returns post ID in x-restli-id header
+            post_id = response.headers.get('x-restli-id') or response.headers.get('x-linkedin-id')
             print(f"✓ Post published successfully!")
             print(f"  Post ID: {post_id}")
             return post_id
         else:
             print(f"❌ ERROR: Failed to post (Status {response.status_code})")
             print(f"  Response: {response.text}")
+            
+            # Provide helpful error messages
+            if response.status_code == 400:
+                error_data = response.json() if response.text else {}
+                error_msg = error_data.get('message', '')
+                
+                if 'organization permissions' in error_msg.lower() or 'organization as' in error_msg.lower():
+                    print()
+                    print("  ⚠ PERMISSION ERROR:")
+                    print("  Your access token doesn't have 'w_organization_social' permission.")
+                    print()
+                    print("  SOLUTION:")
+                    print("  1. Your LinkedIn app MUST have 'Community Management API' product approved")
+                    print("     - Go to https://www.linkedin.com/developers/apps")
+                    print("     - Select your app → 'Products' tab")
+                    print("     - Find 'Community Management API' (Development Tier)")
+                    print("     - Click 'Request access' if not already requested")
+                    print("     - Wait for approval (may take time)")
+                    print()
+                    print("  2. Regenerate your access token:")
+                    print("     python get_access_token.py")
+                    print()
+                    print("  3. The new token will include 'w_organization_social' scope")
+                    return None
+            
+            if response.status_code == 403:
+                error_data = response.json() if response.text else {}
+                error_msg = error_data.get('message', '')
+                
+                if 'author' in error_msg.lower():
+                    print()
+                    print("  Troubleshooting:")
+                    print("  1. Verify your organization URN is correct")
+                    print("  2. Ensure you have ADMINISTRATOR role on the organization")
+                    print("  3. Check that your access token has 'w_organization_social' scope")
+                    print("     (Required for posting to organization pages)")
+                    print("  4. Ensure your LinkedIn app has 'Community Management API' product approved")
+                    print("  5. Try running: python get_access_token.py to refresh your token")
+                    print()
+                    print("  To verify your organization URN, check:")
+                    print("  - Your LinkedIn app settings")
+                    print("  - Or use: https://www.linkedin.com/company/XXXXX/admin/dashboard/")
+                    print("    (replace XXXXX with your company ID)")
+                
             return None
             
     except requests.exceptions.RequestException as e:
@@ -557,11 +685,38 @@ Examples:
         print("   Format: urn:li:organization:XXXXX")
         print("   You can find this in your LinkedIn app settings or company page")
         sys.exit(1)
+
+    # Verify token has w_organization_social scope (requires client_id/secret in .env)
+    scope_ok = verify_token_has_org_scope()
+    if scope_ok is False:
+        print()
+        print("❌ ERROR: Your access token does NOT have 'w_organization_social' permission.")
+        print()
+        print("   This scope is required for posting to organization/company pages.")
+        print()
+        print("   FIX: Run the following to get a new token with the correct scope:")
+        print("        python get_access_token.py")
+        print()
+        print("   Also verify your LinkedIn app has 'Community Management API' product APPROVED:")
+        print("   https://www.linkedin.com/developers/apps → Your App → Products")
+        print()
+        sys.exit(1)
+    elif scope_ok is True:
+        print("✓ Token has w_organization_social scope")
     
     print(f"✓ Company Page: {LINKEDIN_COMPANY_PAGE_URN}")
     if dry_run:
         print("✓ Mode: DRY RUN (preview only)")
-    print()
+    else:
+        # Verify organization access (non-blocking)
+        print("Verifying organization access...")
+        verify_result = verify_organization_access(LINKEDIN_COMPANY_PAGE_URN)
+        if verify_result is False:
+            print("  ⚠ Warning: Could not verify access to this organization")
+            print("  Continuing anyway - the API call will confirm permissions...")
+        elif verify_result is True:
+            print("  ✓ Organization access verified")
+        print()
     
     # Determine which file to use - prefer JSON
     file_path = None
@@ -580,7 +735,7 @@ Examples:
     else:
         print("❌ ERROR: No posts file found")
         print("   Create posts.json with a JSON array:")
-        print('   [{"text": "Your post here"}, {"text": "Another post"}]')
+        print('   [{"content": "Your post here"}, {"content": "Another post"}]')
         sys.exit(1)
     
     if not posts:
@@ -640,7 +795,7 @@ Examples:
     if posts_skipped_future and dry_run:
         print("Future scheduled posts (not ready yet):")
         for i, post in enumerate(posts_skipped_future[:5], 1):  # Show first 5
-            text = post.get('text', '') or post.get('content', '')
+            text = post.get('content', '')
             date = post.get('postingDate') or post.get('scheduled', '')
             preview = text[:60] + "..." if len(text) > 60 else text
             print(f"  {i}. [{date}] {preview}")
@@ -651,7 +806,7 @@ Examples:
     if posts_skipped_no_date and dry_run:
         print("Posts skipped (no postingDate):")
         for i, post in enumerate(posts_skipped_no_date[:5], 1):  # Show first 5
-            text = post.get('text', '') or post.get('content', '')
+            text = post.get('content', '')
             preview = text[:60] + "..." if len(text) > 60 else text
             print(f"  {i}. {preview}")
         if len(posts_skipped_no_date) > 5:
@@ -666,7 +821,7 @@ Examples:
         if posts_skipped_future:
             print("\nFuture scheduled posts:")
             for i, post in enumerate(posts_skipped_future, 1):
-                text = post.get('text', '') or post.get('content', '')
+                text = post.get('content', '')
                 date = post.get('postingDate') or post.get('scheduled', '')
                 preview = text[:50] + "..." if len(text) > 50 else text
                 print(f"  {i}. [{date}] {preview}")
@@ -679,7 +834,7 @@ Examples:
     print("Posts to be published:")
     print("-" * 60)
     for i, post in enumerate(all_ready_posts, 1):
-        text = post.get('text', post) if isinstance(post, dict) else post
+        text = post.get('content', '') if isinstance(post, dict) else str(post)
         preview = text[:60] + "..." if len(text) > 60 else text
         posting_date = post.get('postingDate') or post.get('scheduled', '')
         date_str = f" [{posting_date}]" if posting_date and posting_date.strip() else ""
@@ -717,7 +872,7 @@ Examples:
     for i, post in enumerate(all_ready_posts, 1):
         # Handle both dict and string formats
         if isinstance(post, dict):
-            text = post.get('text', post.get('content', ''))
+            text = post.get('content', '')
         else:
             text = str(post)
         

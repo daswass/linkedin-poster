@@ -23,8 +23,14 @@ REDIRECT_PORT = int(os.getenv('REDIRECT_PORT', '8000'))
 REDIRECT_URI = f'http://localhost:{REDIRECT_PORT}/callback'
 
 # Required scopes for posting to company pages
-# w_member_social: Required for posting to company pages
-SCOPES = ['w_member_social']
+# w_organization_social: Required for posting to organization/company pages
+# w_member_social: Required for posting on behalf of authenticated member
+# Note: For organization posts, you need w_organization_social permission
+# which requires your LinkedIn app to have the "Community Management API" product approved
+# 
+# If you get "invalid_scope_error", it means Community Management API is not approved yet.
+# In that case, we'll try requesting just w_organization_social first, then fall back to w_member_social
+SCOPES = ['w_organization_social', 'w_member_social']
 
 class CallbackHandler(http.server.SimpleHTTPRequestHandler):
     """Handle OAuth callback"""
@@ -56,6 +62,8 @@ class CallbackHandler(http.server.SimpleHTTPRequestHandler):
             elif 'error' in query_params:
                 error = query_params['error'][0]
                 error_description = query_params.get('error_description', ['Unknown error'])[0]
+                self.server.auth_error = error
+                self.server.auth_error_description = error_description
                 self.send_response(400)
                 self.send_header('Content-type', 'text/html')
                 self.end_headers()
@@ -63,8 +71,9 @@ class CallbackHandler(http.server.SimpleHTTPRequestHandler):
                     <html>
                     <body>
                         <h1>Authorization Failed</h1>
-                        <p>Error: {error}</p>
-                        <p>Description: {error_description}</p>
+                        <p><strong>Error:</strong> {error}</p>
+                        <p><strong>Description:</strong> {error_description}</p>
+                        <p>Please check the terminal for detailed troubleshooting steps.</p>
                     </body>
                     </html>
                 """.encode())
@@ -167,8 +176,13 @@ def main():
     print("2. Request required permissions:")
     print("   - Go to https://www.linkedin.com/developers/apps")
     print("   - Select your app → 'Products' tab")
-    print("   - Request 'Marketing Developer Platform' product")
-    print("   - This grants the 'w_member_social' scope needed for posting")
+    print("   - Click 'Request access' for 'Community Management API' (Development Tier)")
+    print("   - Fill out the access request form with your use case")
+    print("   - This grants the 'w_organization_social' scope needed for organization posts")
+    print("   - ⚠ IMPORTANT: You MUST have 'Community Management API' product APPROVED")
+    print("     before running this script (otherwise you'll get 'invalid_scope_error')")
+    print("   - If you see 'invalid_scope_error', check if the product is approved")
+    print("   - If you see an exclusivity error, create a NEW app (see SETUP_NEW_APP.md)")
     print()
     print("3. Add redirect URI:")
     print("   - Go to 'Auth' tab")
@@ -183,6 +197,10 @@ def main():
     httpd = None
     actual_port = REDIRECT_PORT
     actual_redirect_uri = REDIRECT_URI
+    
+    # Initialize error tracking
+    auth_error = None
+    auth_error_description = None
     
     try:
         httpd = socketserver.TCPServer(("", actual_port), handler)
@@ -216,6 +234,8 @@ def main():
     
     with httpd:
         httpd.auth_code = None
+        httpd.auth_error = None
+        httpd.auth_error_description = None
         
         # Step 4: Open browser for authorization
         print("Step 4: Authorization required")
@@ -243,9 +263,38 @@ def main():
         httpd.handle_request()
         
         auth_code = httpd.auth_code
+        auth_error = httpd.auth_error
+        auth_error_description = httpd.auth_error_description
     
     if not auth_code:
+        if auth_error == 'invalid_scope_error':
+            print()
+            print("=" * 60)
+            print("⚠️  INVALID SCOPE ERROR")
+            print("=" * 60)
+            print()
+            print("The scope 'w_organization_social' is not available because:")
+            print("  1. Your LinkedIn app doesn't have 'Community Management API' product APPROVED")
+            print("  2. OR you're using an app that already has other products (exclusivity requirement)")
+            print()
+            print("SOLUTION:")
+            print("  1. Check your app's Products tab:")
+            print("     https://www.linkedin.com/developers/apps")
+            print("  2. If 'Community Management API' shows as 'Requested' (not 'Approved'):")
+            print("     - Wait for LinkedIn's approval (may take days)")
+            print("     - Check your email for approval notifications")
+            print("  3. If you see an exclusivity error when requesting:")
+            print("     - Create a NEW app specifically for Community Management API")
+            print("     - See SETUP_NEW_APP.md for detailed instructions")
+            print("  4. Once approved, run this script again")
+            print()
+            print("Current scopes requested:", ', '.join(SCOPES))
+            print("=" * 60)
+            sys.exit(1)
         print("❌ ERROR: No authorization code received")
+        if auth_error:
+            print(f"Error: {auth_error}")
+            print(f"Description: {auth_error_description}")
         print("Please make sure you authorized the app and that the redirect URI matches.")
         sys.exit(1)
     
@@ -298,8 +347,14 @@ def main():
     print("Add this to your .env file as:")
     print(f"LINKEDIN_ACCESS_TOKEN={access_token}")
     print()
-    print("⚠️  IMPORTANT: Access tokens expire after 60 days.")
-    print("   You'll need to run this script again to get a new token.")
+    print("⚠️  IMPORTANT:")
+    print("   1. Access tokens expire after 60 days.")
+    print("   2. If you get 'Organization permissions must be used' errors when posting:")
+    print("      - Your LinkedIn app needs 'Community Management API' product APPROVED")
+    print("      - Check: https://www.linkedin.com/developers/apps → Your App → Products")
+    print("      - The approval process may take time")
+    print("   3. Requested scopes:", ', '.join(SCOPES))
+    print("      (w_organization_social is required for organization posts)")
     print("=" * 60)
 
 

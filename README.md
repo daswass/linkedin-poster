@@ -29,6 +29,8 @@ Automate posting to your LinkedIn company page from a simple text or JSON file.
    - **Optional** - For image generation:
      - `GEMINI_API_KEY` - Get from https://aistudio.google.com/app/apikey
 
+   **⚠️ Important:** If you already have a LinkedIn app with "Share on LinkedIn" product, you'll need to create a **new app** for organization posting because "Community Management API" requires exclusivity. See `SETUP_NEW_APP.md` for detailed instructions.
+
 3. **Get your access token:**
 
    ```bash
@@ -88,7 +90,7 @@ Lines starting with `#` are treated as comments and ignored.
 
 ### Option 2: JSON File (posts.json) - Recommended
 
-Create a file called `posts.json` with a JSON array. You can use either `text` or `content` field:
+Create a file called `posts.json` with a JSON array. Use the `content` field for post text:
 
 ```json
 [
@@ -110,7 +112,7 @@ Create a file called `posts.json` with a JSON array. You can use either `text` o
 
 **Fields:**
 
-- `content` or `text` (required): The post text
+- `content` (required): The post text
 - `postingDate` (required): Date string in format `YYYY-MM-DD` or full ISO 8601 datetime (e.g., "2026-02-10" or "2026-02-10T10:00:00Z"). Posts with empty `postingDate` will be skipped
 - `imagePrompt` (optional): Text description for AI image generation using Google Gemini. If provided, an image will be generated and included with the post.
 - `posted` (auto-added): Automatically set to `true` after successful posting
@@ -229,11 +231,51 @@ The script will:
 - `"2026-02-10T10:00:00"` - Full ISO 8601 without timezone (assumed UTC)
 - Any format parseable by Python's dateutil library
 
+## Troubleshooting
+
+### Error: "Organization permissions must be used when using organization as author"
+
+**Cause:** Your access token doesn't have the `w_organization_social` permission.
+
+**Solution:**
+
+1. **Check your LinkedIn app products:**
+   - Go to https://www.linkedin.com/developers/apps
+   - Select your app → "Products" tab
+   - Find "Community Management API" (Development Tier)
+   - Click "Request access" if not already requested
+   - Ensure it shows as **APPROVED** (not just requested)
+   - Approval can take time - LinkedIn reviews each request
+
+2. **Regenerate your access token:**
+   ```bash
+   python get_access_token.py
+   ```
+   - This will request `w_organization_social` scope
+   - The scope will only be granted if the product is approved
+
+3. **Verify:**
+   - Try posting again: `python linkedin_poster.py --dry-run`
+   - If you still get the error, the product may not be approved yet
+
+### Error: 403 Access Denied
+
+- Verify your organization URN is correct (format: `urn:li:organization:XXXXX`)
+- Ensure you have ADMINISTRATOR role on the organization
+- Check that your access token hasn't expired (tokens expire after 60 days)
+
+### Error: Image upload fails
+
+- Check that your access token has `w_organization_social` permission
+- Verify the image file exists and is readable
+- Ensure image format is supported (JPG, PNG, GIF)
+- Check image size limits (less than 36,152,320 pixels)
+
 ## Notes
 
 - Access tokens expire after 60 days. Run `get_access_token.py` again to get a new token.
 - **LinkedIn API Limitation:** The LinkedIn API posts immediately when called. True scheduling requires running this script periodically via cron/task scheduler.
-- Make sure you have the "Marketing Developer Platform" product approved in your LinkedIn app.
+- **Required Product:** You MUST have the "Community Management API" product **APPROVED** in your LinkedIn app to post to organization pages. Request it from your app's Products tab.
 
 ## Files
 
