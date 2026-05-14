@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import argparse
+import re
 import requests
 from dotenv import load_dotenv
 from datetime import datetime, timezone
@@ -471,7 +472,11 @@ def verify_organization_access(company_urn):
 def verify_token_has_org_scope():
     """
     Use LinkedIn token introspection to verify the access token has w_organization_social.
-    Returns True if scope is present, False if missing, None if we couldn't check.
+    Returns:
+      True if scope is present,
+      False if the token is active but missing the scope,
+      'inactive' if LinkedIn says the token is inactive/expired,
+      None if we couldn't check.
     """
     if not LINKEDIN_CLIENT_ID or not LINKEDIN_CLIENT_SECRET:
         return None  # Can't introspect without client credentials
@@ -493,10 +498,10 @@ def verify_token_has_org_scope():
 
         data = response.json()
         if not data.get('active'):
-            return False
+            return 'inactive'
 
         scope_str = data.get('scope', '') or ''
-        scopes = [s.strip() for s in scope_str.split(',')]
+        scopes = [s.strip() for s in re.split(r'[\s,]+', scope_str) if s.strip()]
         return 'w_organization_social' in scopes
     except Exception:
         return None
@@ -688,6 +693,14 @@ Examples:
 
     # Verify token has w_organization_social scope (requires client_id/secret in .env)
     scope_ok = verify_token_has_org_scope()
+    if scope_ok == 'inactive':
+        print()
+        print("❌ ERROR: Your LinkedIn access token is inactive or expired.")
+        print()
+        print("   FIX: Run the following to generate a fresh token:")
+        print("        python get_access_token.py")
+        print()
+        sys.exit(1)
     if scope_ok is False:
         print()
         print("❌ ERROR: Your access token does NOT have 'w_organization_social' permission.")
