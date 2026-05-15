@@ -4,6 +4,7 @@
 import os
 import sys
 from pathlib import Path
+from datetime import datetime, timezone
 
 import requests
 from dotenv import load_dotenv
@@ -92,6 +93,7 @@ def main():
         'LINKEDIN_ACCESS_TOKEN_EXPIRES_IN': token_data.get('expires_in'),
         'LINKEDIN_REFRESH_TOKEN_EXPIRES_IN': token_data.get('refresh_token_expires_in'),
         'LINKEDIN_GRANTED_SCOPE': token_data.get('scope'),
+        'LINKEDIN_TOKEN_REFRESHED_AT': datetime.now(timezone.utc).isoformat(),
     })
 
     print('✓ LinkedIn access token refreshed and saved to .env')

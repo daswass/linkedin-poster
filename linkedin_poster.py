@@ -10,14 +10,17 @@ import json
 import argparse
 import re
 import requests
+from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 from dateutil import parser as date_parser
 
 # Load environment variables
-load_dotenv()
+ENV_PATH = Path(__file__).with_name('.env')
+load_dotenv(dotenv_path=ENV_PATH)
 
 LINKEDIN_ACCESS_TOKEN = os.getenv('LINKEDIN_ACCESS_TOKEN')
+LINKEDIN_REFRESH_TOKEN = os.getenv('LINKEDIN_REFRESH_TOKEN')
 LINKEDIN_COMPANY_PAGE_URN = os.getenv('LINKEDIN_COMPANY_PAGE_URN')
 LINKEDIN_CLIENT_ID = os.getenv('LINKEDIN_CLIENT_ID')
 LINKEDIN_CLIENT_SECRET = os.getenv('LINKEDIN_CLIENT_SECRET')
@@ -29,6 +32,93 @@ POSTS_API = 'https://api.linkedin.com/rest/posts'
 IMAGES_API = 'https://api.linkedin.com/v2/images'
 # LinkedIn API version (format: YYYYMM)
 LINKEDIN_API_VERSION = '202601'  # January 2026 (202502 sunset)
+
+
+def mask_token(token):
+    """Return a safe display version of a token."""
+    if not token:
+        return ''
+    if len(token) <= 12:
+        return token[:4] + '…'
+    return token[:8] + '…' + token[-4:]
+
+
+def set_env_values(path, updates):
+    """Create/update selected keys in a dotenv file without printing secrets."""
+    existing = path.read_text().splitlines() if path.exists() else []
+    output = []
+    remaining = dict(updates)
+
+    for line in existing:
+        if '=' in line and not line.lstrip().startswith('#'):
+            key = line.split('=', 1)[0].strip()
+            if key in remaining:
+                value = remaining.pop(key)
+                if value is not None:
+                    output.append(f'{key}={value}')
+                continue
+        output.append(line)
+
+    if remaining:
+        if output and output[-1] != '':
+            output.append('')
+        for key, value in remaining.items():
+            if value is not None:
+                output.append(f'{key}={value}')
+
+    path.write_text('\n'.join(output) + '\n')
+
+
+def refresh_linkedin_access_token(reason='token refresh requested'):
+    """Refresh the LinkedIn access token using LINKEDIN_REFRESH_TOKEN."""
+    global LINKEDIN_ACCESS_TOKEN, LINKEDIN_REFRESH_TOKEN
+
+    if not LINKEDIN_CLIENT_ID or not LINKEDIN_CLIENT_SECRET or not LINKEDIN_REFRESH_TOKEN:
+        print("❌ ERROR: LinkedIn token refresh is not configured.")
+        print("   Need LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, and LINKEDIN_REFRESH_TOKEN in .env")
+        return False
+
+    print(f"Refreshing LinkedIn access token ({reason})...")
+    try:
+        response = requests.post(
+            'https://www.linkedin.com/oauth/v2/accessToken',
+            data={
+                'grant_type': 'refresh_token',
+                'refresh_token': LINKEDIN_REFRESH_TOKEN,
+                'client_id': LINKEDIN_CLIENT_ID,
+                'client_secret': LINKEDIN_CLIENT_SECRET,
+            },
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            timeout=30,
+        )
+    except requests.exceptions.RequestException as e:
+        print(f"❌ ERROR: Could not refresh LinkedIn access token: {e}")
+        return False
+
+    if response.status_code != 200:
+        print(f"❌ ERROR: LinkedIn token refresh failed (Status {response.status_code})")
+        print(f"  Response: {response.text}")
+        print("  Manual OAuth reauthorization is required: python get_access_token.py")
+        return False
+
+    token_data = response.json()
+    access_token = token_data.get('access_token')
+    if not access_token:
+        print("❌ ERROR: LinkedIn refresh response did not include access_token")
+        return False
+
+    LINKEDIN_ACCESS_TOKEN = access_token
+    LINKEDIN_REFRESH_TOKEN = token_data.get('refresh_token') or LINKEDIN_REFRESH_TOKEN
+    set_env_values(ENV_PATH, {
+        'LINKEDIN_ACCESS_TOKEN': LINKEDIN_ACCESS_TOKEN,
+        'LINKEDIN_REFRESH_TOKEN': LINKEDIN_REFRESH_TOKEN,
+        'LINKEDIN_ACCESS_TOKEN_EXPIRES_IN': token_data.get('expires_in'),
+        'LINKEDIN_REFRESH_TOKEN_EXPIRES_IN': token_data.get('refresh_token_expires_in'),
+        'LINKEDIN_GRANTED_SCOPE': token_data.get('scope'),
+        'LINKEDIN_TOKEN_REFRESHED_AT': datetime.now(timezone.utc).isoformat(),
+    })
+    print(f"✓ LinkedIn access token refreshed: {mask_token(LINKEDIN_ACCESS_TOKEN)}")
+    return True
 
 
 def load_posts_from_file(file_path='posts.txt'):
@@ -589,6 +679,10 @@ def post_to_linkedin(text, company_urn, image_path=None, dry_run=False):
     
     try:
         response = requests.post(POSTS_API, json=post_data, headers=headers)
+
+        if response.status_code == 401 and refresh_linkedin_access_token('post request returned 401'):
+            headers['Authorization'] = f'Bearer {LINKEDIN_ACCESS_TOKEN}'
+            response = requests.post(POSTS_API, json=post_data, headers=headers)
         
         if response.status_code == 201:
             # New Posts API returns post ID in x-restli-id header
@@ -694,13 +788,15 @@ Examples:
     # Verify token has w_organization_social scope (requires client_id/secret in .env)
     scope_ok = verify_token_has_org_scope()
     if scope_ok == 'inactive':
-        print()
-        print("❌ ERROR: Your LinkedIn access token is inactive or expired.")
-        print()
-        print("   FIX: Run the following to generate a fresh token:")
-        print("        python get_access_token.py")
-        print()
-        sys.exit(1)
+        print("ℹ LinkedIn access token is inactive or expired.")
+        if refresh_linkedin_access_token('token introspection reported inactive'):
+            scope_ok = verify_token_has_org_scope()
+        else:
+            print()
+            print("   FIX: Run the following to generate a fresh token:")
+            print("        python get_access_token.py")
+            print()
+            sys.exit(1)
     if scope_ok is False:
         print()
         print("❌ ERROR: Your access token does NOT have 'w_organization_social' permission.")

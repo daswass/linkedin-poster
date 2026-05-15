@@ -64,7 +64,7 @@ You can use the predefined tasks in VS Code or run commands directly:
 # Dry run (preview)
 python linkedin_poster.py --dry-run
 
-# Post ready items
+# Post ready items; automatically refreshes LINKEDIN_ACCESS_TOKEN first if it is expired/inactive
 python linkedin_poster.py
 
 # Test image generation

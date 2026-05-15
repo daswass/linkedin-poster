@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 import requests
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 # Load environment variables
 load_dotenv()
@@ -383,6 +384,7 @@ def main():
         'LINKEDIN_ACCESS_TOKEN_EXPIRES_IN': token_data.get('expires_in'),
         'LINKEDIN_REFRESH_TOKEN_EXPIRES_IN': token_data.get('refresh_token_expires_in'),
         'LINKEDIN_GRANTED_SCOPE': token_data.get('scope'),
+        'LINKEDIN_TOKEN_REFRESHED_AT': datetime.now(timezone.utc).isoformat(),
     }
     set_env_values(ENV_PATH, saved_fields)
     print()
