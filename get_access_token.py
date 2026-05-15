@@ -10,6 +10,7 @@ import urllib.parse
 import http.server
 import socketserver
 import webbrowser
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 import requests
 from dotenv import load_dotenv
@@ -101,8 +102,46 @@ def get_authorization_url():
     return auth_url
 
 
+ENV_PATH = Path(__file__).with_name('.env')
+
+
+def mask_token(token):
+    """Return a safe display version of a token."""
+    if not token:
+        return ''
+    if len(token) <= 12:
+        return token[:4] + '…'
+    return token[:8] + '…' + token[-4:]
+
+
+def set_env_values(path, updates):
+    """Create/update selected keys in a dotenv file without printing secrets."""
+    existing = path.read_text().splitlines() if path.exists() else []
+    output = []
+    remaining = dict(updates)
+
+    for line in existing:
+        if '=' in line and not line.lstrip().startswith('#'):
+            key = line.split('=', 1)[0].strip()
+            if key in remaining:
+                value = remaining.pop(key)
+                if value is not None:
+                    output.append(f'{key}={value}')
+                continue
+        output.append(line)
+
+    if remaining:
+        if output and output[-1] != '':
+            output.append('')
+        for key, value in remaining.items():
+            if value is not None:
+                output.append(f'{key}={value}')
+
+    path.write_text('\n'.join(output) + '\n')
+
+
 def exchange_code_for_token(auth_code):
-    """Exchange authorization code for access token"""
+    """Exchange authorization code for token response data."""
     token_url = 'https://www.linkedin.com/oauth/v2/accessToken'
     
     data = {
@@ -116,8 +155,7 @@ def exchange_code_for_token(auth_code):
     response = requests.post(token_url, data=data, headers={'Content-Type': 'application/x-www-form-urlencoded'})
     
     if response.status_code == 200:
-        token_data = response.json()
-        return token_data.get('access_token')
+        return response.json()
     else:
         print(f"Error exchanging code for token: {response.status_code}")
         print(f"Response: {response.text}")
@@ -303,7 +341,8 @@ def main():
     
     # Step 5: Exchange code for access token
     print("Step 5: Exchanging authorization code for access token...")
-    access_token = exchange_code_for_token(auth_code)
+    token_data = exchange_code_for_token(auth_code)
+    access_token = token_data.get('access_token') if token_data else None
     
     if not access_token:
         print("❌ ERROR: Failed to get access token")
@@ -336,24 +375,41 @@ def main():
         print("4. Add it to your .env file as LINKEDIN_COMPANY_PAGE_URN")
     print()
     
-    # Step 7: Save token
-    print("Step 7: Saving access token...")
+    # Step 7: Save token response fields
+    print("Step 7: Saving token response fields...")
+    saved_fields = {
+        'LINKEDIN_ACCESS_TOKEN': access_token,
+        'LINKEDIN_REFRESH_TOKEN': token_data.get('refresh_token'),
+        'LINKEDIN_ACCESS_TOKEN_EXPIRES_IN': token_data.get('expires_in'),
+        'LINKEDIN_REFRESH_TOKEN_EXPIRES_IN': token_data.get('refresh_token_expires_in'),
+        'LINKEDIN_GRANTED_SCOPE': token_data.get('scope'),
+    }
+    set_env_values(ENV_PATH, saved_fields)
     print()
     print("=" * 60)
-    print("SUCCESS! Your access token:")
+    print("SUCCESS! Token response saved to .env")
     print("=" * 60)
-    print(access_token)
-    print()
-    print("Add this to your .env file as:")
-    print(f"LINKEDIN_ACCESS_TOKEN={access_token}")
+    print(f"LINKEDIN_ACCESS_TOKEN={mask_token(access_token)}")
+    if token_data.get('expires_in'):
+        print(f"LINKEDIN_ACCESS_TOKEN_EXPIRES_IN={token_data.get('expires_in')}")
+    if token_data.get('refresh_token'):
+        print(f"LINKEDIN_REFRESH_TOKEN={mask_token(token_data.get('refresh_token'))}")
+    else:
+        print("LINKEDIN_REFRESH_TOKEN not returned by LinkedIn")
+    if token_data.get('refresh_token_expires_in'):
+        print(f"LINKEDIN_REFRESH_TOKEN_EXPIRES_IN={token_data.get('refresh_token_expires_in')}")
+    if token_data.get('scope'):
+        print(f"LINKEDIN_GRANTED_SCOPE={token_data.get('scope')}")
     print()
     print("⚠️  IMPORTANT:")
     print("   1. Access tokens expire after 60 days.")
-    print("   2. If you get 'Organization permissions must be used' errors when posting:")
+    print("   2. Refresh tokens are only returned if this LinkedIn app is authorized")
+    print("      for programmatic refresh tokens; otherwise reauthorization is still required.")
+    print("   3. If you get 'Organization permissions must be used' errors when posting:")
     print("      - Your LinkedIn app needs 'Community Management API' product APPROVED")
     print("      - Check: https://www.linkedin.com/developers/apps → Your App → Products")
     print("      - The approval process may take time")
-    print("   3. Requested scopes:", ', '.join(SCOPES))
+    print("   4. Requested scopes:", ', '.join(SCOPES))
     print("      (w_organization_social is required for organization posts)")
     print("=" * 60)
 

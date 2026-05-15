@@ -72,6 +72,9 @@ python test_image_generation.py
 
 # Get access token
 python get_access_token.py
+
+# Refresh access token, if LinkedIn returned LINKEDIN_REFRESH_TOKEN
+python refresh_access_token.py
 ```
 
 ### Option 1: Simple Text File (posts.txt)
