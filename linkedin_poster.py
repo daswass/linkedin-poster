@@ -303,6 +303,11 @@ def prepare_text_for_linkedin(text):
     # Ensure text is a string
     if not isinstance(text, str):
         text = str(text)
+
+    # Some upstream generation paths hand us content that was already escaped
+    # for JSON before being written into posts.json. json.load only unwraps the
+    # outer JSON layer, leaving literal \" artifacts in the post body.
+    text = text.replace('\\"', '"')
     
     # LinkedIn supports \n for line breaks - ensure they're preserved
     # The API will handle them correctly when sent as JSON
