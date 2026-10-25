@@ -14,6 +14,7 @@ from dateutil import parser as date_parser
 from dotenv import load_dotenv
 
 GOOGLE_BUSINESS_SCOPE = "https://www.googleapis.com/auth/business.manage"
+GOOGLE_BUSINESS_QUOTA_PROJECT = os.getenv("GOOGLE_BUSINESS_QUOTA_PROJECT")
 
 ROOT = Path(__file__).resolve().parent
 POSTS_PATH = ROOT / "posts.json"
@@ -63,6 +64,7 @@ def save_posts(container, path=POSTS_PATH):
 
 
 def google_access_token(session=requests):
+    global GOOGLE_BUSINESS_QUOTA_PROJECT
     access_token = os.getenv("GOOGLE_BUSINESS_ACCESS_TOKEN")
     if access_token:
         return access_token
@@ -93,6 +95,7 @@ def google_access_token(session=requests):
         from google.auth.transport.requests import Request
         credentials, _ = google.auth.default(scopes=[GOOGLE_BUSINESS_SCOPE])
         credentials.refresh(Request())
+        GOOGLE_BUSINESS_QUOTA_PROJECT = GOOGLE_BUSINESS_QUOTA_PROJECT or credentials.quota_project_id
         if credentials.token:
             return credentials.token
     except Exception as error:
@@ -147,9 +150,12 @@ def create_local_post(post, access_token, session=requests):
             "url": cta_url,
         }
 
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    if GOOGLE_BUSINESS_QUOTA_PROJECT:
+        headers["X-Goog-User-Project"] = GOOGLE_BUSINESS_QUOTA_PROJECT
     response = session.post(
         url,
-        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        headers=headers,
         json=payload,
         timeout=30,
     )
