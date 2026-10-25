@@ -13,6 +13,8 @@ import requests
 from dateutil import parser as date_parser
 from dotenv import load_dotenv
 
+GOOGLE_BUSINESS_SCOPE = "https://www.googleapis.com/auth/business.manage"
+
 ROOT = Path(__file__).resolve().parent
 POSTS_PATH = ROOT / "posts.json"
 load_dotenv(ROOT / ".env")
@@ -68,28 +70,40 @@ def google_access_token(session=requests):
     refresh_token = os.getenv("GOOGLE_BUSINESS_REFRESH_TOKEN")
     client_id = os.getenv("GOOGLE_BUSINESS_CLIENT_ID")
     client_secret = os.getenv("GOOGLE_BUSINESS_CLIENT_SECRET")
-    if not all((refresh_token, client_id, client_secret)):
-        raise RuntimeError(
-            "Google Business credentials are incomplete. Set GOOGLE_BUSINESS_ACCESS_TOKEN "
-            "or GOOGLE_BUSINESS_CLIENT_ID, GOOGLE_BUSINESS_CLIENT_SECRET, and GOOGLE_BUSINESS_REFRESH_TOKEN."
+    if all((refresh_token, client_id, client_secret)):
+        response = session.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=30,
         )
+        if response.status_code != 200:
+            raise RuntimeError(f"Google OAuth refresh failed (HTTP {response.status_code}): {response.text[:300]}")
+        token = response.json().get("access_token")
+        if not token:
+            raise RuntimeError("Google OAuth refresh response did not contain access_token")
+        return token
 
-    response = session.post(
-        TOKEN_URL,
-        data={
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": client_id,
-            "client_secret": client_secret,
-        },
-        timeout=30,
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"Google OAuth refresh failed (HTTP {response.status_code}): {response.text[:300]}")
-    token = response.json().get("access_token")
-    if not token:
-        raise RuntimeError("Google OAuth refresh response did not contain access_token")
-    return token
+    try:
+        import google.auth
+        from google.auth.transport.requests import Request
+        credentials, _ = google.auth.default(scopes=[GOOGLE_BUSINESS_SCOPE])
+        credentials.refresh(Request())
+        if credentials.token:
+            return credentials.token
+    except Exception as error:
+        raise RuntimeError(
+            "Google Business credentials are incomplete. Run `gcloud auth application-default login "
+            "--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/business.manage` "
+            "or configure GOOGLE_BUSINESS_CLIENT_ID, GOOGLE_BUSINESS_CLIENT_SECRET, and "
+            f"GOOGLE_BUSINESS_REFRESH_TOKEN. ({error})"
+        ) from error
+
+    raise RuntimeError("Google Application Default Credentials did not provide an access token")
 
 
 def eligible_posts(posts, start_at):
